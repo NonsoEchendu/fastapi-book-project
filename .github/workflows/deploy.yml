@@ -1,0 +1,70 @@
+name: Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          USER: ${{ secrets.SERVER_USER }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Debug Environment Variables
+        run: |
+          echo "Server IP: $SERVER_IP"
+          echo "User: $USER"
+
+      - name: Set Up SSH
+        run: |
+          # Setup SSH
+          mkdir -p ~/.ssh 
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+          
+      - name: Prepare EC2 Instance & Pull Latest Code
+        run: |
+          ssh $USER@$SERVER_IP << 'EOF'
+            set -e  # Stop script if any command fails
+            
+            # Ensure project directory exists
+            if [ ! -d "/home/$USER/fastapi-book-project" ]; then
+              git clone https://github.com/NonsoEchendu/fastapi-book-project.git /home/$USER/fastapi-book-project
+            fi
+
+            # Go to project folder
+            cd /home/$USER/fastapi-book-project
+
+            # Fetch latest changes
+            git reset --hard  # Ensure a clean state
+            git pull origin main
+          EOF
+
+      - name: Install Docker
+        run: |
+          ssh $USER@$SERVER_IP << 'EOF'
+            sudo apt-get update
+            sudo apt-get install -y docker.io 
+            sudo usermod -aG docker $USER
+          EOF
+
+          ssh $USER@$SERVER_IP "docker ps"
+
+      - name: Deploy With Docker 
+        run: |
+          ssh $USER@$SERVER_IP << 'EOF'
+            cd /home/$USER/fastapi-book-project
+            docker stop fastapi-app || true
+            docker rm fastapi-app || true
+            docker build -t fastapi-app .
+            docker run -d --name fastapi-app -p 8000:8000 fastapi-app
+          EOF
